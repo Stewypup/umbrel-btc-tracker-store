@@ -22,10 +22,8 @@ support: https://github.com/stewypup/umbrel-btc-tracker-store/issues
 submitter: stewypup
 submission: https://github.com/stewypup/umbrel-btc-tracker-store
 
-dependencies:
-  - electrs
+#dependencies:
+#  - electrs
 
 port: 4567
 
-gallery:
-  - 1.jpg
