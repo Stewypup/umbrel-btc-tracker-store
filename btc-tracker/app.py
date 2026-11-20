@@ -17,6 +17,7 @@ import prices
 import scanner
 import balances
 import scheduler
+import sync
 
 logging.basicConfig(
     level=logging.INFO,
@@ -267,21 +268,31 @@ def create_app():
             db.set_setting(conn, "currency", currency)
         return redirect(url_for("dashboard"))
 
-    @app.route("/sync", methods=["POST"])
-    def sync():
-        """Trigger a full sync in the background and redirect back."""
-        def _bg():
-            try:
-                scanner.scan_all_wallets()
-                balances.rebuild_all_balances()
-                prices.backfill_prices()
-            except Exception:
-                log.exception("Background sync failed")
+    def _wants_json():
+        return (
+            request.headers.get("X-Requested-With") == "fetch"
+            or request.accept_mimetypes.best == "application/json"
+        )
 
-        t = threading.Thread(target=_bg, daemon=True)
-        t.start()
-        flash("Sync started in the background. Refresh in a minute to see updated data.", "info")
-        return redirect(url_for("dashboard"))
+    @app.route("/sync", methods=["POST"])
+    def sync_start():
+        """Start a full sync in the background (or attach to a running one)."""
+        started = sync.start(source="manual")
+        if _wants_json():
+            return jsonify(started=started, status=sync.status())
+        # No-JavaScript fallback
+        if started:
+            flash("Sync started in the background. Refresh in a minute to see updated data.", "info")
+        else:
+            flash("A sync is already running.", "info")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    @app.route("/sync/status")
+    def sync_status():
+        """Progress of the current (or last) sync, polled by the progress bar."""
+        resp = jsonify(sync.status())
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.route("/api/chart-data")
     def api_chart_data():

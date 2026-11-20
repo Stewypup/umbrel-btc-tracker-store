@@ -327,3 +327,56 @@ a:hover { text-decoration: underline; }
 .badge-sent     { background: rgba(224, 82, 82, 0.15);  color: var(--red); }
 .badge-transfer { background: rgba(136, 136, 136, 0.15); color: var(--text-muted); }
 .badge-pending  { background: rgba(91, 156, 246, 0.15); color: var(--blue); }
+
+/* ---- Sync progress ---- */
+.sync-panel {
+  position: sticky;
+  top: 56px;               /* just under the sticky navbar */
+  z-index: 99;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.sync-panel[hidden] { display: none; }
+.sync-panel-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 10px 20px 12px;
+}
+.sync-text {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+#sync-percent {
+  color: var(--orange);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.sync-track {
+  height: 6px;
+  background: var(--surface2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.sync-fill {
+  height: 100%;
+  width: 0;
+  background: var(--orange);
+  border-radius: 3px;
+  transition: width 0.6s ease;
+  background-image: linear-gradient(
+    90deg, transparent 0%, rgba(255, 255, 255, 0.25) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: sync-shimmer 1.6s linear infinite;
+}
+.sync-panel--error .sync-fill { background-color: var(--red); animation: none; }
+.sync-panel--error #sync-percent { color: var(--red); }
+@keyframes sync-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+.btn:disabled { opacity: 0.6; cursor: default; }
+.alert-fade { opacity: 0; transition: opacity 0.6s; }

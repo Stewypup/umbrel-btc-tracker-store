@@ -1,14 +1,15 @@
 """
-scanner.py — BIP84 (Native SegWit / zpub) address derivation and Electrs querying.
+scanner.py — BIP84 (Native SegWit / zpub) address derivation and Electrum
+server querying.
 
-Uses the Electrum TCP protocol (JSON-RPC over TCP, port 50001) to communicate
-with the local Electrs server on Umbrel, since romanz/electrs does NOT provide
-an Esplora REST API.
+Talks to the local Fulcrum server on Umbrel over the Electrum TCP protocol
+(newline-delimited JSON-RPC, port 50002). Any Electrum-protocol server works,
+so Electrs can still be used by pointing ELECTRUM_HOST / ELECTRUM_PORT at it.
 
 For each wallet:
   1. Derive receiving (chain=0) and change (chain=1) addresses using embit.
   2. Compute the Electrum-style scripthash for each address.
-  3. Query Electrs via TCP for transaction history per scripthash.
+  3. Query the server for transaction history per scripthash.
   4. Parse raw transactions with embit to compute net sats per address.
   5. Store addresses and transactions in the database.
 
@@ -31,11 +32,27 @@ import db
 
 log = logging.getLogger(__name__)
 
-ELECTRS_HOST = os.environ.get("ELECTRS_HOST", "127.0.0.1")
-ELECTRS_PORT = int(os.environ.get("ELECTRS_PORT", "50001"))
+# Fulcrum on Umbrel: 10.21.21.200:50002 (plain TCP).
+# The old ELECTRS_* variable names are still honoured as a fallback.
+ELECTRUM_HOST = os.environ.get(
+    "ELECTRUM_HOST", os.environ.get("ELECTRS_HOST", "10.21.21.200")
+)
+ELECTRUM_PORT = int(os.environ.get(
+    "ELECTRUM_PORT", os.environ.get("ELECTRS_PORT", "50002")
+))
 
 GAP_LIMIT = 20
 SOCKET_TIMEOUT = 30  # seconds
+CLIENT_NAME = "cold-storage-tracker"
+PROTOCOL_VERSION = "1.4"
+
+
+class ServerUnavailable(Exception):
+    """The Electrum server could not be reached or dropped the connection."""
+
+
+class ElectrumError(Exception):
+    """The server answered a request with an error."""
 
 
 # ---------------------------------------------------------------------------
@@ -55,11 +72,24 @@ class ElectrumClient:
         self._header_cache = {}  # block height -> timestamp (int)
 
     def connect(self):
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._sock.settimeout(SOCKET_TIMEOUT)
-        self._sock.connect((self.host, self.port))
+        try:
+            self._sock = socket.create_connection(
+                (self.host, self.port), timeout=SOCKET_TIMEOUT
+            )
+        except OSError as exc:
+            self._sock = None
+            raise ServerUnavailable(
+                f"Couldn't connect to Fulcrum at {self.host}:{self.port} ({exc}). "
+                "Check that Fulcrum is installed and has finished indexing — "
+                "it doesn't accept connections until its initial sync is done."
+            ) from exc
         self._buffer = b""
-        log.info("Connected to Electrum server at %s:%d", self.host, self.port)
+        # Fulcrum expects version negotiation before other calls.
+        version = self.call("server.version", [CLIENT_NAME, PROTOCOL_VERSION])
+        log.info(
+            "Connected to Electrum server at %s:%d (%s)",
+            self.host, self.port, version,
+        )
 
     def close(self):
         if self._sock:
@@ -81,20 +111,27 @@ class ElectrumClient:
             "method": method,
             "params": params or [],
         }
-        self._sock.sendall((json.dumps(req) + "\n").encode())
+        try:
+            self._sock.sendall((json.dumps(req) + "\n").encode())
 
-        # Read until we get a full line (newline-delimited response)
-        while b"\n" not in self._buffer:
-            chunk = self._sock.recv(65536)
-            if not chunk:
-                raise ConnectionError("Electrum server closed connection")
-            self._buffer += chunk
+            # Read until we get a full line (newline-delimited response)
+            while b"\n" not in self._buffer:
+                chunk = self._sock.recv(65536)
+                if not chunk:
+                    raise ServerUnavailable(
+                        "Fulcrum closed the connection during the scan."
+                    )
+                self._buffer += chunk
+        except OSError as exc:
+            raise ServerUnavailable(
+                f"Lost connection to Fulcrum at {self.host}:{self.port} ({exc})."
+            ) from exc
 
         line, self._buffer = self._buffer.split(b"\n", 1)
         resp = json.loads(line)
 
         if "error" in resp and resp["error"]:
-            raise Exception(f"Electrum error: {resp['error']}")
+            raise ElectrumError(f"Electrum error: {resp['error']}")
 
         return resp.get("result")
 
@@ -177,24 +214,43 @@ def _net_value_for_address(client, raw_hex, addr_script_bytes):
     return received - spent
 
 
+def estimate_address_count(wallet_id):
+    """
+    How many addresses a scan of this wallet is likely to check, for the
+    progress bar. Every derived address (including the gap) is stored, so a
+    re-scan checks about as many as last time; a first scan checks at least
+    the gap limit on both chains.
+    """
+    with db.get_conn() as conn:
+        stored = len(db.get_addresses_for_wallet(conn, wallet_id))
+    return max(stored, 2 * GAP_LIMIT)
+
+
 # ---------------------------------------------------------------------------
 # Wallet scanning
 # ---------------------------------------------------------------------------
 
-def scan_wallet(wallet_id, xpub):
+def scan_wallet(wallet_id, xpub, progress=None):
     """
     Full scan of a wallet: derive addresses, fetch transactions, store results.
-    Uses the Electrum TCP protocol to communicate with Electrs.
+
+    progress: optional callback(addresses_checked, transactions_found), called
+    after each address.
+
+    Raises ValueError for a bad xpub and ServerUnavailable if Fulcrum can't be
+    reached or drops the connection. Nothing is saved for a wallet whose scan
+    fails part-way, so a dropped connection can't make a wallet look empty.
     """
     log.info("Scanning wallet %s (xpub: %s...)", wallet_id, xpub[:20])
 
     try:
         root_key = bip32.HDKey.from_base58(xpub)
     except Exception as exc:
-        log.error("Invalid xpub for wallet %s: %s", wallet_id, exc)
-        return
+        raise ValueError(f"invalid xpub ({exc})") from exc
 
-    client = ElectrumClient(ELECTRS_HOST, ELECTRS_PORT)
+    client = ElectrumClient(ELECTRUM_HOST, ELECTRUM_PORT)
+    checked = 0
+    tx_found = 0
 
     try:
         client.connect()
@@ -216,7 +272,7 @@ def scan_wallet(wallet_id, xpub):
 
                     try:
                         history = client.get_history(sh)
-                    except Exception as exc:
+                    except ElectrumError as exc:
                         log.warning(
                             "Electrum error for %s: %s", address, exc
                         )
@@ -235,7 +291,7 @@ def scan_wallet(wallet_id, xpub):
                             if height and height > 0:
                                 try:
                                     block_time = client.get_block_time(height)
-                                except Exception:
+                                except ElectrumError:
                                     pass
 
                             # Parse raw tx and compute net value
@@ -244,6 +300,8 @@ def scan_wallet(wallet_id, xpub):
                                 value_sats = _net_value_for_address(
                                     client, raw_hex, addr_script_bytes
                                 )
+                            except ServerUnavailable:
+                                raise
                             except Exception as exc:
                                 log.warning(
                                     "Error processing tx %s: %s",
@@ -259,6 +317,7 @@ def scan_wallet(wallet_id, xpub):
                                 block_time,
                                 value_sats,
                             )
+                            tx_found += 1
 
                         log.debug(
                             "Wallet %s chain=%d idx=%d address=%s txs=%d",
@@ -266,10 +325,16 @@ def scan_wallet(wallet_id, xpub):
                         )
 
                     idx += 1
+                    checked += 1
+                    if progress:
+                        progress(checked, tx_found)
 
             db.touch_wallet_scanned(conn, wallet_id)
 
-        log.info("Wallet %s scan complete.", wallet_id)
+        log.info(
+            "Wallet %s scan complete: %d addresses, %d transactions.",
+            wallet_id, checked, tx_found,
+        )
 
     finally:
         client.close()

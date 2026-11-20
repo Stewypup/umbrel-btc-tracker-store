@@ -2,12 +2,12 @@ manifestVersion: 1
 id: mystore-btc-tracker
 category: bitcoin
 name: Cold Storage Tracker
-version: "1.0.0"
+version: "1.1.0"
 tagline: Track your cold storage Bitcoin holdings over time
 
 description: >
   A private, self-hosted dashboard that tracks your cold storage Bitcoin wallets
-  using your local Electrs server. Enter your xpub/zpub keys, and the app will
+  using your local Fulcrum server. Enter your xpub/zpub keys, and the app will
   derive all addresses, fetch your full transaction history from the blockchain,
   and chart your total portfolio value in USD over time using daily BTC price
   data from CoinGecko.
@@ -23,7 +23,12 @@ submitter: stewypup
 submission: https://github.com/stewypup/umbrel-btc-tracker-store
 
 #dependencies:
-#  - electrs
+#  - fulcrum
+
+releaseNotes: >-
+  Now uses Fulcrum instead of Electrs. Sync Now shows a live progress bar and
+  the page refreshes itself when the sync finishes. If Fulcrum can't be
+  reached, the sync now says so instead of quietly showing empty wallets.
 
 port: 4567
 

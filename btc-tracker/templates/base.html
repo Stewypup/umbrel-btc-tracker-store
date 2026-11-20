@@ -20,11 +20,23 @@
         <button type="submit" name="currency" value="cad" class="cur-btn {{ 'cur-active' if cur == 'cad' else '' }}">CAD</button>
       </form>
 
-      <form action="{{ url_for('sync') }}" method="post" style="display:inline">
-        <button type="submit" class="btn btn-sync">Sync Now</button>
+      <form id="sync-form" action="{{ url_for('sync_start') }}" method="post" style="display:inline">
+        <button type="submit" id="sync-btn" class="btn btn-sync">Sync Now</button>
       </form>
     </div>
   </nav>
+
+  <!-- Sync progress (shown by sync.js while a sync runs) -->
+  <div id="sync-panel" class="sync-panel" hidden
+       data-status-url="{{ url_for('sync_status') }}">
+    <div class="sync-panel-inner">
+      <div class="sync-text">
+        <span id="sync-message">Starting sync…</span>
+        <span id="sync-percent">0%</span>
+      </div>
+      <div class="sync-track"><div id="sync-fill" class="sync-fill"></div></div>
+    </div>
+  </div>
 
   <main class="container">
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -34,6 +46,7 @@
         {% endfor %}
       {% endif %}
     {% endwith %}
+    <div id="sync-result"></div>
 
     {% block content %}{% endblock %}
   </main>
@@ -41,5 +54,6 @@
   <footer class="footer">
     All data is private and stored locally on your Umbrel.
   </footer>
+  <script src="{{ url_for('static', filename='sync.js') }}"></script>
 </body>
 </html>
