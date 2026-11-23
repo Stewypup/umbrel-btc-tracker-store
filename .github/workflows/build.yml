@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/btc-tracker
+  IMAGE_NAME: stewypup/btc-tracker
 
 jobs:
   build-and-push:

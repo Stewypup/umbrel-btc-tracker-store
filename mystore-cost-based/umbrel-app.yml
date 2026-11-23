@@ -2,7 +2,7 @@ manifestVersion: 1
 id: mystore-cost-based
 category: bitcoin
 name: Cost Based
-version: "0.5.0"
+version: "0.5.0-1"
 tagline: Private Bitcoin cost basis & capital gains tracker
 description: >
   Calculate your Bitcoin capital gains and losses using HIFO, FIFO, or LIFO

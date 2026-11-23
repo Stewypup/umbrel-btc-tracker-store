@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/cost-based
+  IMAGE_NAME: stewypup/cost-based
 
 jobs:
   build-and-push:

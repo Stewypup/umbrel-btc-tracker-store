@@ -2,7 +2,7 @@ manifestVersion: 1
 id: mystore-btc-tracker
 category: bitcoin
 name: Cold Storage Tracker
-version: "1.3.0"
+version: "1.3.1"
 tagline: Track your cold storage Bitcoin holdings over time
 
 description: >
