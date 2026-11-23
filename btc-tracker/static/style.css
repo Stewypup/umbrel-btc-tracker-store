@@ -127,15 +127,15 @@ a:hover { text-decoration: underline; }
 /* ---- Summary bar ---- */
 .summary-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
   margin-bottom: 28px;
 }
 .summary-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px 24px;
+  padding: 18px 20px;
 }
 .summary-card--total {
   border-color: var(--orange);
@@ -145,8 +145,8 @@ a:hover { text-decoration: underline; }
   border-color: var(--gold);
   background: var(--gold-dim);
 }
-.summary-label { font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
-.summary-value { font-size: 1.9rem; font-weight: 700; color: var(--text); }
+.summary-label { font-size: 0.74rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; margin-bottom: 4px; }
+.summary-value { font-size: 1.55rem; font-weight: 700; color: var(--text); white-space: nowrap; }
 .summary-currency { font-size: 0.7rem; font-weight: 500; color: var(--text-muted); vertical-align: middle; }
 .summary-sub   { font-size: 0.82rem; color: var(--text-muted); margin-top: 2px; }
 
@@ -380,3 +380,104 @@ a:hover { text-decoration: underline; }
 }
 .btn:disabled { opacity: 0.6; cursor: default; }
 .alert-fade { opacity: 0; transition: opacity 0.6s; }
+
+/* ---- Cost basis card ---- */
+.summary-card--cost {
+  border-color: var(--blue);
+  background: rgba(91, 156, 246, 0.10);
+}
+
+/* ---- Obsolete wallets ---- */
+.wallet-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: -8px 0 12px;
+}
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.switch:hover { color: var(--text); }
+.switch-track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: left 0.15s, background 0.15s;
+}
+.switch--on .switch-track { background: var(--orange-dim); border-color: var(--orange); }
+.switch--on .switch-thumb { left: 16px; background: var(--orange); }
+.wallet-card--obsolete { opacity: 0.55; border-style: dashed; }
+.wallet-card--obsolete .wallet-btc { color: var(--text-muted); }
+.badge-obsolete {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  color: var(--text-muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+}
+.row-obsolete td { color: var(--text-muted); }
+.row-obsolete td strong { color: var(--text-muted); }
+.row-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ---- Chart controls ---- */
+.chart-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.range-buttons {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.range-btn {
+  padding: 4px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  background: var(--surface2);
+  transition: all 0.15s;
+}
+.range-buttons .range-btn + .range-btn { border-left: 1px solid var(--border); }
+#reset-zoom { border: 1px solid var(--border); border-radius: 6px; }
+.range-btn:hover { color: var(--text); }
+.range-btn.range-active { background: var(--orange); color: #000; }
+.range-btn[hidden] { display: none; }
+.chart-hint {
+  margin-top: 10px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-align: center;
+}

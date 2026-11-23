@@ -54,16 +54,31 @@
     </thead>
     <tbody>
       {% for w in wallets %}
-      <tr>
-        <td><strong>{{ w['label'] }}</strong></td>
+      <tr class="{{ 'row-obsolete' if w['obsolete'] else '' }}">
+        <td>
+          <strong>{{ w['label'] }}</strong>
+          {% if w['obsolete'] %}<span class="badge-obsolete">Obsolete</span>{% endif %}
+        </td>
         <td class="mono">{{ w['xpub'][:30] }}…</td>
         <td>{{ w['created_at'][:10] }}</td>
         <td>{{ w['last_scanned_at'][:10] if w['last_scanned_at'] else '—' }}</td>
         <td>
+          <div class="row-actions">
+          <form action="{{ url_for('wallet_set_obsolete', wallet_id=w['id']) }}" method="post">
+            {% if w['obsolete'] %}
+            <input type="hidden" name="obsolete" value="0" />
+            <button type="submit" class="btn btn-sync btn-sm">Restore</button>
+            {% else %}
+            <input type="hidden" name="obsolete" value="1" />
+            <button type="submit" class="btn btn-sync btn-sm"
+                    title="Hide on the dashboard; still synced and counted in your cost basis">Mark obsolete</button>
+            {% endif %}
+          </form>
           <form action="{{ url_for('wallet_delete', wallet_id=w['id']) }}" method="post"
                 onsubmit="return confirm('Remove wallet \'{{ w['label'] }}\'? All its stored data will be deleted.')">
             <button type="submit" class="btn btn-danger btn-sm">Remove</button>
           </form>
+          </div>
         </td>
       </tr>
       {% endfor %}

@@ -54,6 +54,7 @@ def create_app():
             # Read user's currency preference (default to USD)
             currency = db.get_setting(conn, "currency", "usd")
             currency_label = "CAD" if currency == "cad" else "USD"
+            show_obsolete = db.get_setting(conn, "show_obsolete", "0") == "1"
 
             wallets = db.get_wallets(conn)
             latest_price = db.get_latest_price(conn, currency)
@@ -62,6 +63,7 @@ def create_app():
             total_sats = 0
             for w in wallets:
                 bal_sats = db.get_current_balance_sats(conn, w["id"])
+                # Totals include every wallet, so funds are never hidden
                 total_sats += bal_sats
                 bal_btc = bal_sats / 1e8
                 bal_fiat = round(bal_btc * latest_price, 2) if latest_price else None
@@ -70,12 +72,17 @@ def create_app():
                     "id": w["id"],
                     "label": w["label"],
                     "xpub_short": w["xpub"][:20] + "...",
+                    "obsolete": bool(w["obsolete"]),
                     "balance_sats": bal_sats,
-                    "balance_btc": round(bal_btc, 8),
                     "balance_fiat": bal_fiat,
                     "avg_price": avg_price,
                     "last_scanned_at": w["last_scanned_at"],
                 })
+
+            obsolete_count = sum(1 for w in wallet_data if w["obsolete"])
+            active_count = len(wallet_data) - obsolete_count
+            shown_wallets = [w for w in wallet_data
+                             if show_obsolete or not w["obsolete"]]
 
             total_btc = round(total_sats / 1e8, 8)
             total_fiat = round(total_btc * latest_price, 2) if latest_price else None
@@ -83,32 +90,36 @@ def create_app():
             # Portfolio chart data (fiat value over time)
             chart_data = db.get_portfolio_chart_data(conn, currency)
 
-            # BTC held over time (derived from chart_data which has total_sats)
-            btc_chart_labels = json.dumps([r["date"] for r in chart_data])
-            btc_chart_values = json.dumps([round(r["total_sats"] / 1e8, 8)
-                                           for r in chart_data])
-
             # Cumulative amount invested (real purchases only, no transfers)
             invested_data = db.get_cumulative_invested(conn, currency)
+
+            # Individual purchases, for the chart markers
+            purchases = db.get_purchases(conn, currency)
+
+            # Overall cost basis across every wallet, obsolete included
+            cost_basis = db.get_overall_cost_basis(conn, currency)
 
             # All-time-high portfolio value
             max_portfolio = db.get_max_portfolio_value(conn, currency)
 
         return render_template(
             "dashboard.html",
-            wallets=wallet_data,
+            wallets=shown_wallets,
+            active_count=active_count,
+            obsolete_count=obsolete_count,
+            show_obsolete=show_obsolete,
             total_btc=total_btc,
             total_fiat=total_fiat,
             latest_price=latest_price,
             currency=currency,
             currency_label=currency_label,
             max_portfolio=max_portfolio,
+            cost_basis=cost_basis,
             chart_labels=json.dumps([r["date"] for r in chart_data]),
             chart_values=json.dumps([r["total_fiat"] for r in chart_data]),
-            btc_chart_labels=btc_chart_labels,
-            btc_chart_values=btc_chart_values,
             invested_labels=json.dumps([r["date"] for r in invested_data]),
             invested_values=json.dumps([r["cumulative_invested"] for r in invested_data]),
+            purchases=json.dumps(purchases),
         )
 
     @app.route("/wallets")
@@ -136,6 +147,29 @@ def create_app():
             return redirect(url_for("wallet_list"))
         flash(f"Wallet '{label}' added. Click Sync Now to load transaction history.", "success")
         return redirect(url_for("wallet_list"))
+
+    @app.route("/wallets/<int:wallet_id>/obsolete", methods=["POST"])
+    def wallet_set_obsolete(wallet_id):
+        """Mark a wallet obsolete or restore it (Manage Wallets page)."""
+        obsolete = request.form.get("obsolete") == "1"
+        with db.get_conn() as conn:
+            w = db.get_wallet(conn, wallet_id)
+            if w:
+                db.set_wallet_obsolete(conn, wallet_id, obsolete)
+                if obsolete:
+                    flash(f"Wallet '{w['label']}' marked obsolete. It's hidden on the "
+                          "dashboard but still counts in your cost basis.", "success")
+                else:
+                    flash(f"Wallet '{w['label']}' restored.", "success")
+        return redirect(url_for("wallet_list"))
+
+    @app.route("/settings/show-obsolete", methods=["POST"])
+    def set_show_obsolete():
+        """Show or hide obsolete wallets on the dashboard (remembered)."""
+        show = request.form.get("show") == "1"
+        with db.get_conn() as conn:
+            db.set_setting(conn, "show_obsolete", "1" if show else "0")
+        return redirect(url_for("dashboard") + "#wallets")
 
     @app.route("/wallets/<int:wallet_id>/delete", methods=["POST"])
     def wallet_delete(wallet_id):

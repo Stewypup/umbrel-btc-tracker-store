@@ -77,6 +77,14 @@ def init_db():
         except sqlite3.OperationalError:
             conn.execute("ALTER TABLE btc_prices ADD COLUMN cad_price REAL")
 
+        # Migration: obsolete flag on wallets (v1.2.0)
+        try:
+            conn.execute("SELECT obsolete FROM wallets LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute(
+                "ALTER TABLE wallets ADD COLUMN obsolete INTEGER NOT NULL DEFAULT 0"
+            )
+
 
 # --- Settings helpers ---
 
@@ -98,7 +106,10 @@ def set_setting(conn, key, value):
 # --- Wallet helpers ---
 
 def get_wallets(conn):
-    return conn.execute("SELECT * FROM wallets ORDER BY label").fetchall()
+    """All wallets, active first, then obsolete, each alphabetical."""
+    return conn.execute(
+        "SELECT * FROM wallets ORDER BY obsolete, label"
+    ).fetchall()
 
 
 def get_wallet(conn, wallet_id):
@@ -109,6 +120,15 @@ def add_wallet(conn, label, xpub):
     conn.execute(
         "INSERT INTO wallets (label, xpub) VALUES (?, ?)",
         (label.strip(), xpub.strip())
+    )
+
+
+def set_wallet_obsolete(conn, wallet_id, obsolete):
+    """Mark a wallet obsolete (hidden by default, still synced and still
+    counted in cost basis) or restore it."""
+    conn.execute(
+        "UPDATE wallets SET obsolete=? WHERE id=?",
+        (1 if obsolete else 0, wallet_id)
     )
 
 
@@ -377,6 +397,54 @@ def get_cumulative_invested(conn, currency="usd"):
     """).fetchall()
     return [{"date": r["date"], "cumulative_invested": round(r["cumulative_invested"], 2)}
             for r in rows]
+
+
+def get_purchases(conn, currency="usd"):
+    """
+    Purchases (incoming BTC that isn't a transfer between tracked wallets),
+    grouped by UTC day, across every wallet including obsolete ones.
+    Returns a list of {date, sats, cost, price} dicts; price is the
+    weighted average BTC price paid that day.
+    """
+    price_col = "cad_price" if currency == "cad" else "usd_price"
+    rows = conn.execute(f"""
+        SELECT date(t.block_time, 'unixepoch') AS day,
+               SUM(t.value_sats) AS sats,
+               SUM(t.value_sats * p.{price_col} / 1e8) AS cost
+        FROM transactions t
+        JOIN addresses a ON a.id = t.address_id
+        JOIN btc_prices p ON p.date = date(t.block_time, 'unixepoch')
+        WHERE t.value_sats > 0
+          AND t.block_time IS NOT NULL
+          AND p.{price_col} IS NOT NULL
+          AND t.txid NOT IN ({_TRANSFER_TXIDS_SQL})
+        GROUP BY day
+        ORDER BY day
+    """).fetchall()
+    return [{
+        "date": r["day"],
+        "sats": r["sats"],
+        "cost": round(r["cost"], 2),
+        "price": round(r["cost"] / (r["sats"] / 1e8), 2),
+    } for r in rows]
+
+
+def get_overall_cost_basis(conn, currency="usd"):
+    """
+    Total fiat invested and weighted-average purchase price across every
+    wallet (obsolete included), excluding transfers between tracked wallets.
+    Returns {invested, avg_price, sats} or None if there are no purchases.
+    """
+    purchases = get_purchases(conn, currency)
+    sats = sum(p["sats"] for p in purchases)
+    if not sats:
+        return None
+    invested = sum(p["cost"] for p in purchases)
+    return {
+        "invested": round(invested, 2),
+        "avg_price": round(invested / (sats / 1e8), 2),
+        "sats": sats,
+    }
 
 
 def get_wallet_transactions(conn, wallet_id):
