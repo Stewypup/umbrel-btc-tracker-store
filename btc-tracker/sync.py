@@ -156,7 +156,7 @@ def _run():
 
         # ---- 3. Update BTC prices -------------------------------------
         _update(stage="prices", percent=100 * (W_SCAN + W_BALANCES),
-                message="Updating BTC prices…")
+                message="Updating BTC prices (Bitstamp / Bank of Canada)…")
         try:
             prices.backfill_prices()
         except Exception as exc:

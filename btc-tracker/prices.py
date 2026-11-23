@@ -1,17 +1,20 @@
 """
-prices.py — Fetch BTC daily price history from CoinGecko and store in DB.
+prices.py — Daily BTC prices in USD and CAD.
 
-Fetches both USD and CAD prices so the user can switch display currency.
-On first run (or when the table is nearly empty) we fetch the full history.
-Subsequent daily calls only fetch the most recent few days.
-CoinGecko free tier requires a demo API key (free, no credit card).
-Set the COINGECKO_API_KEY environment variable with your key.
+Sources (both free, no API key):
+  * USD: Bitstamp daily BTC/USD candles (closing price of each UTC day).
+  * CAD: the USD price converted with the Bank of Canada's official daily
+    USD/CAD rate (Valet API, series FXUSDCAD). Weekends and holidays use the
+    last business day's rate; today uses the latest published rate.
+
+backfill_prices() makes sure every day from the oldest wallet transaction
+(or one year back, whichever is earlier) to today has a price. It only
+downloads what's missing, plus the last few days so today's price stays
+current.
 """
 
 import logging
-import os
-import time
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
@@ -19,84 +22,149 @@ import db
 
 log = logging.getLogger(__name__)
 
-COINGECKO_BASE = "https://api.coingecko.com/api/v3"
-COINGECKO_API_KEY = os.environ.get("COINGECKO_API_KEY", "")
+BITSTAMP_OHLC = "https://www.bitstamp.net/api/v2/ohlc/btcusd/"
+BOC_FX = "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json"
 REQUEST_TIMEOUT = 30
+PAGE_DAYS = 1000          # Bitstamp returns at most 1000 candles per call
+REFRESH_DAYS = 3          # always re-fetch the last few days
+MIN_HISTORY_DAYS = 365    # keep at least a year of prices for the chart
+SOURCE = "bitstamp+boc"   # stored in settings; a change triggers a full refetch
+
+USER_AGENT = "cold-storage-tracker (self-hosted)"
 
 
-def _fetch_history(vs_currency, days="max"):
+class PriceError(Exception):
+    """A price source couldn't be reached or returned something unexpected."""
+
+
+def _utc_date(ts):
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).date()
+
+
+def _get_json(url, params):
+    try:
+        resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT,
+                            headers={"User-Agent": USER_AGENT})
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as exc:
+        host = url.split("/")[2]
+        raise PriceError(f"Couldn't get prices from {host} ({exc}).") from exc
+    except ValueError as exc:
+        raise PriceError(f"Unexpected response from {url}.") from exc
+
+
+def fetch_usd(start, end):
+    """Daily BTC/USD closing prices from Bitstamp. Returns {date_str: price}."""
+    out = {}
+    cursor = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+    stop = datetime(end.year, end.month, end.day, tzinfo=timezone.utc)
+    while cursor <= stop:
+        page_end = min(cursor + timedelta(days=PAGE_DAYS - 1), stop)
+        data = _get_json(BITSTAMP_OHLC, {
+            "step": 86400,
+            "limit": PAGE_DAYS,
+            "start": int(cursor.timestamp()),
+            "end": int(page_end.timestamp()) + 86399,
+        })
+        try:
+            candles = data["data"]["ohlc"]
+        except (KeyError, TypeError) as exc:
+            raise PriceError(f"Unexpected Bitstamp response: {str(data)[:200]}") from exc
+        for c in candles:
+            d = _utc_date(c["timestamp"])
+            if start <= d <= end:
+                out[d.isoformat()] = round(float(c["close"]), 2)
+        cursor = page_end + timedelta(days=1)
+    return out
+
+
+def fetch_usdcad(start, end):
     """
-    Fetch BTC price history from CoinGecko for a given fiat currency.
-    Returns a dict of {date_str: price}.
-
-    Note: CoinGecko auto-selects granularity based on 'days':
-      1 day = 5-min, 2-90 days = hourly, >90 days = daily.
-    The 'interval' parameter is NOT used (removed from free/demo tier).
+    Bank of Canada USD/CAD rate for every calendar day from start to end,
+    forward-filled over weekends and holidays. Returns {date_str: rate}.
     """
-    url = (
-        f"{COINGECKO_BASE}/coins/bitcoin/market_chart"
-        f"?vs_currency={vs_currency}&days={days}"
-    )
-    headers = {}
-    if COINGECKO_API_KEY:
-        headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
-    resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    data = resp.json()
+    # Look back a couple of weeks so the first days have a rate to carry
+    data = _get_json(BOC_FX, {
+        "start_date": (start - timedelta(days=14)).isoformat(),
+        "end_date": end.isoformat(),
+    })
+    obs = {}
+    for o in data.get("observations", []):
+        try:
+            obs[o["d"]] = float(o["FXUSDCAD"]["v"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not obs:
+        raise PriceError("The Bank of Canada returned no USD/CAD rates.")
 
-    results = {}
-    for ts_ms, price in data.get("prices", []):
-        d = date.fromtimestamp(ts_ms / 1000).isoformat()
-        results[d] = round(price, 2)
-    return results
+    # The series starts in 2017; use its first rate for anything earlier.
+    first_rate = obs[min(obs)]
+    if start.isoformat() < min(obs):
+        log.warning("No Bank of Canada rate before %s; using %.4f for earlier "
+                    "CAD prices.", min(obs), first_rate)
+
+    out = {}
+    rate = first_rate
+    d = start - timedelta(days=14)
+    while d <= end:
+        rate = obs.get(d.isoformat(), rate)
+        if d >= start:
+            out[d.isoformat()] = rate
+        d += timedelta(days=1)
+    return out
+
+
+def _wanted_start(conn):
+    """Earliest date we need a price for."""
+    oldest = db.get_oldest_transaction_date(conn)
+    year_ago = date.today() - timedelta(days=MIN_HISTORY_DAYS)
+    if oldest:
+        return min(date.fromisoformat(oldest), year_ago)
+    return year_ago
 
 
 def backfill_prices():
     """
-    Called on startup and during the daily sync.
-    If we have fewer than 30 days of price data, fetch the full history.
-    Otherwise, fetch only the last 3 days (to fill any gap and update today).
-
-    Fetches both USD and CAD prices from CoinGecko.
+    Fill in any missing daily prices from the oldest transaction to today,
+    and refresh the last few days. Raises PriceError if a source fails.
     """
-    with db.get_conn() as conn:
-        prices = db.get_prices(conn)
-
-    is_full = len(prices) < 30
-    # CoinGecko free/demo tier does not support days=max.
-    # 365 days covers over a year of history, which is enough for most wallets.
-    days = 365 if is_full else 3
-    label = "full" if is_full else "recent"
-
-    # Fetch USD prices
-    try:
-        usd_prices = _fetch_history("usd", days)
-    except Exception as exc:
-        log.error("Failed to fetch %s USD prices: %s", label, exc)
-        return
-
-    # Brief pause to respect rate limits
-    time.sleep(2)
-
-    # Fetch CAD prices
-    try:
-        cad_prices = _fetch_history("cad", days)
-    except Exception as exc:
-        log.warning("Failed to fetch %s CAD prices: %s (USD saved anyway)", label, exc)
-        cad_prices = {}
-
-    # Merge and store
-    all_dates = set(usd_prices.keys()) | set(cad_prices.keys())
+    today = datetime.now(timezone.utc).date()
 
     with db.get_conn() as conn:
-        for d_str in sorted(all_dates):
-            usd = usd_prices.get(d_str)
-            cad = cad_prices.get(d_str)
-            if usd is not None:
-                db.upsert_price(conn, d_str, usd, cad)
-            elif cad is not None:
-                # Rare edge case: have CAD but not USD for a date
-                # Skip — we require USD as the base
-                pass
+        start = _wanted_start(conn)
+        if db.get_setting(conn, "price_source") != SOURCE:
+            have = set()          # new source: refetch everything once
+            log.info("Price source changed to %s; fetching full history.", SOURCE)
+        else:
+            have = db.get_complete_price_dates(conn)
 
-    log.info("Price data updated (%s): %d dates stored.", label, len(all_dates))
+    # First day in the wanted range that has no price yet
+    first_missing = None
+    d = start
+    while d <= today:
+        if d.isoformat() not in have:
+            first_missing = d
+            break
+        d += timedelta(days=1)
+
+    fetch_from = today - timedelta(days=REFRESH_DAYS - 1)
+    if first_missing and first_missing < fetch_from:
+        fetch_from = first_missing
+
+    log.info("Fetching BTC prices %s → %s", fetch_from, today)
+    usd = fetch_usd(fetch_from, today)
+    if not usd:
+        raise PriceError("Bitstamp returned no BTC prices.")
+    fx = fetch_usdcad(fetch_from, today)
+
+    with db.get_conn() as conn:
+        for d_str in sorted(usd):
+            rate = fx.get(d_str)
+            cad = round(usd[d_str] * rate, 2) if rate else None
+            db.upsert_price(conn, d_str, usd[d_str], cad)
+        db.set_setting(conn, "price_source", SOURCE)
+
+    log.info("Price data updated: %d days (%s → %s).",
+             len(usd), min(usd), max(usd))
+    return len(usd)

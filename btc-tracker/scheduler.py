@@ -4,7 +4,7 @@ scheduler.py — APScheduler configuration for the daily sync job.
 The job runs at 02:00 UTC every day and:
   1. Scans all wallets via Fulcrum to pick up new transactions.
   2. Rebuilds daily balance history for all wallets.
-  3. Fetches the latest BTC prices from CoinGecko.
+  3. Fetches the latest BTC prices (Bitstamp + Bank of Canada).
 
 It goes through sync.py, so it never overlaps a manual Sync Now.
 """

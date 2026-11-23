@@ -39,7 +39,10 @@ def create_app():
     # On first start, backfill prices in the background so the UI loads fast
     def _initial_sync():
         log.info("Running initial price backfill…")
-        prices.backfill_prices()
+        try:
+            prices.backfill_prices()
+        except Exception:
+            log.exception("Initial price backfill failed (will retry on next sync)")
 
     t = threading.Thread(target=_initial_sync, daemon=True)
     t.start()
@@ -117,6 +120,7 @@ def create_app():
             cost_basis=cost_basis,
             chart_labels=json.dumps([r["date"] for r in chart_data]),
             chart_values=json.dumps([r["total_fiat"] for r in chart_data]),
+            chart_prices=json.dumps([r["price"] for r in chart_data]),
             invested_labels=json.dumps([r["date"] for r in invested_data]),
             invested_values=json.dumps([r["cumulative_invested"] for r in invested_data]),
             purchases=json.dumps(purchases),

@@ -2,15 +2,15 @@ manifestVersion: 1
 id: mystore-btc-tracker
 category: bitcoin
 name: Cold Storage Tracker
-version: "1.2.0"
+version: "1.3.0"
 tagline: Track your cold storage Bitcoin holdings over time
 
 description: >
   A private, self-hosted dashboard that tracks your cold storage Bitcoin wallets
   using your local Fulcrum server. Enter your xpub/zpub keys, and the app will
   derive all addresses, fetch your full transaction history from the blockchain,
-  and chart your total portfolio value in USD over time using daily BTC price
-  data from CoinGecko.
+  and chart your total portfolio value in USD or CAD over time using daily BTC
+  prices from Bitstamp and the Bank of Canada's USD/CAD rate.
 
   All data stays on your Umbrel — no third parties ever see your wallet addresses
   or balances.
@@ -26,11 +26,12 @@ submission: https://github.com/stewypup/umbrel-btc-tracker-store
 #  - fulcrum
 
 releaseNotes: >-
-  Wallet cards show balances in sats. Wallets can be marked obsolete on the
-  Manage Wallets page and hidden on the dashboard while still counting in
-  your cost basis. New Total Invested card with your average purchase price.
-  The portfolio chart now shows purchase markers and can be zoomed (range
-  buttons, drag or scroll). Removed the BTC Held Over Time chart.
+  The portfolio chart can switch to a BTC price view showing where each
+  purchase happened and your average purchase price. Prices now come from
+  Bitstamp and the Bank of Canada (no API key needed) and go back to your
+  oldest transaction, so older purchases count in your cost basis. Also in
+  1.2.0: sats on wallet cards, obsolete wallets, Total Invested card,
+  purchase markers and chart zoom.
 
 port: 4567
 

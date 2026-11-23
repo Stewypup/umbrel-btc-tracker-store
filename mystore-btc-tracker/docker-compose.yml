@@ -14,8 +14,6 @@ services:
       # available, otherwise Fulcrum's fixed Umbrel address and port.
       ELECTRUM_HOST: "${APP_FULCRUM_NODE_IP:-10.21.21.200}"
       ELECTRUM_PORT: "${APP_FULCRUM_NODE_PORT:-50002}"
-      # CoinGecko demo API key (free — get yours at coingecko.com/en/api/pricing)
-      COINGECKO_API_KEY: "REMOVED-API-KEY"
       # Flask secret key — Umbrel provides a unique seed per app
       SECRET_KEY: "${APP_SEED}"
       # SQLite database path (inside the /data volume)

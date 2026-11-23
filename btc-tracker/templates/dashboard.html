@@ -129,10 +129,15 @@
 {% endif %}
 
 <section class="chart-section">
-  <h2 class="chart-title">Portfolio Value Over Time ({{ currency_label }})</h2>
+  <h2 class="chart-title" id="chart-title">Portfolio Value Over Time ({{ currency_label }})</h2>
   {% if chart_labels and chart_labels != '[]' %}
   <div class="chart-wrapper">
     <div class="chart-toolbar">
+      <div class="range-buttons view-buttons" role="group" aria-label="Chart view">
+        <button type="button" class="range-btn" data-view="portfolio">Portfolio value</button>
+        <button type="button" class="range-btn" data-view="price">BTC price</button>
+      </div>
+      <div class="chart-toolbar-right">
       <div class="range-buttons" role="group" aria-label="Time range">
         <button type="button" class="range-btn" data-range="1M">1M</button>
         <button type="button" class="range-btn" data-range="3M">3M</button>
@@ -142,6 +147,7 @@
         <button type="button" class="range-btn" data-range="ALL">All</button>
       </div>
       <button type="button" class="range-btn" id="reset-zoom" hidden>Reset zoom</button>
+      </div>
     </div>
     <canvas id="portfolioChart"></canvas>
     <div class="chart-hint">Drag across the chart or scroll to zoom · Shift + drag to pan · Click a legend item to show or hide it</div>
@@ -152,6 +158,8 @@
   <script>
     const labels         = {{ chart_labels | safe }};
     const values         = {{ chart_values | safe }};
+    const btcPrices      = {{ chart_prices | safe }};
+    const avgCost        = {{ (cost_basis.avg_price if cost_basis else none) | tojson }};
     const investedLabels = {{ invested_labels | safe }};
     const investedRaw    = {{ invested_values | safe }};
     const purchases      = {{ purchases | safe }};
@@ -183,13 +191,15 @@
     const labelIndex = {};
     labels.forEach((d, i) => { labelIndex[d] = i; });
     const purchaseAt = {};
-    const markerData = labels.map(() => null);
+    const markerPortfolio = labels.map(() => null);
+    const markerPrice = labels.map(() => null);
     const maxSats = Math.max(1, ...purchases.map(p => p.sats));
     purchases.forEach(p => {
       const i = labelIndex[p.date];
       if (i === undefined) return;
       purchaseAt[i] = p;
-      markerData[i] = values[i];
+      markerPortfolio[i] = values[i];
+      markerPrice[i] = p.price;
     });
     const markerRadius = ctx => {
       const p = purchaseAt[ctx.dataIndex];
@@ -199,8 +209,9 @@
     const datasets = [
       {
         key: 'purchases',
+        view: 'both',
         label: 'Purchases',
-        data: markerData,
+        data: markerPortfolio,
         showLine: false,
         pointStyle: 'triangle',
         pointRadius: markerRadius,
@@ -212,6 +223,7 @@
       },
       {
         key: 'portfolio',
+        view: 'portfolio',
         label: 'Portfolio Value',
         data: values,
         borderColor: '#f7931a',
@@ -225,6 +237,7 @@
       },
       {
         key: 'invested',
+        view: 'portfolio',
         label: 'Amount Invested',
         data: investedAligned,
         borderColor: '#5b9cf6',
@@ -238,10 +251,82 @@
         spanGaps: true,
         order: 2,
       },
+      {
+        key: 'price',
+        view: 'price',
+        label: 'BTC Price',
+        data: btcPrices,
+        borderColor: '#f7931a',
+        backgroundColor: 'rgba(247, 147, 26, 0.08)',
+        borderWidth: 2,
+        fill: false,
+        tension: 0.2,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        order: 1,
+      },
+      {
+        key: 'avgcost',
+        view: 'price',
+        label: 'Avg. Purchase Price',
+        data: labels.map(() => avgCost),
+        borderColor: '#5b9cf6',
+        backgroundColor: 'transparent',
+        borderWidth: 2,
+        borderDash: [6, 4],
+        fill: false,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        order: 2,
+      },
     ];
-    datasets.forEach(ds => { ds.hidden = !!hiddenSets[ds.key]; });
+    if (avgCost === null) datasets.pop();
+
+    // Which view is showing, and which legend items the user hid in each
+    let view = store.get('cst-chart-view', 'portfolio');
+    if (view !== 'price') view = 'portfolio';
+    const hideKey = ds => view + ':' + ds.key;
+    function applyView() {
+      datasets.forEach(ds => {
+        const inView = ds.view === 'both' || ds.view === view;
+        ds.hidden = !inView || !!hiddenSets[hideKey(ds)];
+      });
+      datasets[0].data = view === 'price' ? markerPrice : markerPortfolio;
+      document.getElementById('chart-title').textContent = view === 'price'
+        ? 'BTC Price (' + currencyLabel + ')'
+        : 'Portfolio Value Over Time (' + currencyLabel + ')';
+      document.querySelectorAll('.range-btn[data-view]').forEach(b =>
+        b.classList.toggle('range-active', b.dataset.view === view));
+    }
+    applyView();
 
     if (window.ChartZoom) Chart.register(window.ChartZoom);
+
+    // Hover: snap to a purchase marker when the pointer is over one,
+    // otherwise show every series for the nearest day.
+    Chart.Interaction.modes.purchaseIndex = function (chart, e, options, useFinalPosition) {
+      const pos = Chart.helpers.getRelativePosition(e, chart);
+      if (chart.isDatasetVisible(0)) {
+        const meta = chart.getDatasetMeta(0);
+        for (const key of Object.keys(purchaseAt)) {
+          const i = +key;
+          const el = meta.data[i];
+          if (el && !el.skip &&
+              Math.hypot(el.x - pos.x, el.y - pos.y) <= markerRadius({ dataIndex: i }) + 3) {
+            const items = [];
+            chart.data.datasets.forEach((d, k) => {
+              const m = chart.getDatasetMeta(k);
+              if (chart.isDatasetVisible(k) && m.data[i]) {
+                items.push({ element: m.data[i], datasetIndex: k, index: i });
+              }
+            });
+            return items;
+          }
+        }
+      }
+      return Chart.Interaction.modes.index(chart, e,
+        Object.assign({}, options, { intersect: false }), useFinalPosition);
+    };
 
     const resetBtn = document.getElementById('reset-zoom');
     const rangeBtns = document.querySelectorAll('.range-btn[data-range]');
@@ -254,16 +339,28 @@
       data: { labels: labels, datasets: datasets },
       options: {
         responsive: true,
-        interaction: { mode: 'index', intersect: false },
+        // No animations: they race with zoom/range/view changes and can
+        // leave points drawn in the wrong place.
+        animation: false,
+        interaction: { mode: 'purchaseIndex', intersect: false },
         plugins: {
           legend: {
             display: true,
-            labels: { color: '#aaa', usePointStyle: true },
+            labels: {
+              color: '#aaa',
+              usePointStyle: true,
+              filter: (item, data) => {
+                const ds = data.datasets[item.datasetIndex];
+                return ds.view === 'both' || ds.view === view;
+              },
+            },
             onClick(e, item, legend) {
-              Chart.defaults.plugins.legend.onClick.call(this, e, item, legend);
-              const ds = legend.chart.data.datasets[item.datasetIndex];
-              hiddenSets[ds.key] = !legend.chart.isDatasetVisible(item.datasetIndex);
+              const c = legend.chart;
+              const ds = c.data.datasets[item.datasetIndex];
+              hiddenSets[hideKey(ds)] = !hiddenSets[hideKey(ds)];
+              ds.hidden = hiddenSets[hideKey(ds)];
               store.set('cst-chart-hidden', hiddenSets);
+              c.update();
             },
           },
           tooltip: {
@@ -274,6 +371,9 @@
                   const p = purchaseAt[ctx.dataIndex];
                   return 'Bought ' + p.sats.toLocaleString('en-US') + ' sats for ' +
                     money(p.cost, 2) + ' (' + money(p.price, 0) + '/BTC)';
+                }
+                if (ctx.dataset.key === 'price' || ctx.dataset.key === 'avgcost') {
+                  return ctx.dataset.label + ': ' + money(ctx.parsed.y, 0) + ' ' + currencyLabel;
                 }
                 return ctx.dataset.label + ': ' + money(ctx.parsed.y, 2) + ' ' + currencyLabel;
               }
@@ -334,10 +434,12 @@
     function applyRange(r) {
       applyingRange = true;
       if (r === 'ALL' || !chart.zoomScale) {
-        if (chart.resetZoom) chart.resetZoom('none');
+        if (chart.resetZoom) chart.resetZoom();
       } else {
-        chart.zoomScale('x', { min: rangeStart(r), max: labels.length - 1 }, 'none');
+        chart.zoomScale('x', { min: rangeStart(r), max: labels.length - 1 });
       }
+      // Full update so every point is re-laid-out for the new range
+      chart.update();
       applyingRange = false;
       markRange(r);
       resetBtn.hidden = true;
@@ -345,6 +447,13 @@
     }
 
     rangeBtns.forEach(b => b.addEventListener('click', () => applyRange(b.dataset.range)));
+    document.querySelectorAll('.range-btn[data-view]').forEach(b =>
+      b.addEventListener('click', () => {
+        view = b.dataset.view;
+        store.set('cst-chart-view', view);
+        applyView();
+        chart.update();
+      }));
     resetBtn.addEventListener('click', () => applyRange(store.get('cst-chart-range', 'ALL')));
     applyRange(store.get('cst-chart-range', 'ALL'));
   </script>

@@ -244,6 +244,27 @@ def get_prices(conn):
     ).fetchall()
 
 
+def get_complete_price_dates(conn):
+    """Set of 'YYYY-MM-DD' dates that have both a USD and a CAD price."""
+    rows = conn.execute(
+        "SELECT date FROM btc_prices WHERE usd_price IS NOT NULL "
+        "AND cad_price IS NOT NULL"
+    ).fetchall()
+    return {r["date"] for r in rows}
+
+
+def get_oldest_transaction_date(conn):
+    """UTC date of the oldest confirmed transaction in any wallet, or None."""
+    row = conn.execute(
+        "SELECT MIN(block_time) AS t FROM transactions WHERE block_time IS NOT NULL"
+    ).fetchone()
+    if not row or row["t"] is None:
+        return None
+    return conn.execute(
+        "SELECT date(?, 'unixepoch') AS d", (row["t"],)
+    ).fetchone()["d"]
+
+
 def get_latest_price(conn, currency="usd"):
     col = "cad_price" if currency == "cad" else "usd_price"
     row = conn.execute(
